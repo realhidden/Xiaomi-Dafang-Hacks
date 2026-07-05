@@ -29,15 +29,41 @@ CC=mipsel-linux-gnu-gcc CFLAGS="-O2 -march=mips32r2 -static" \
 make -j$(nproc)
 ```
 
-**dropbearmulti** — built with Ingenic mips-gcc472 toolchain (uClibc):
+**dropbearmulti** — built with Ingenic mips-gcc472 toolchain using `-muclibc`:
 
-The camera runs uClibc (`/lib/ld-uClibc.so.0`), so dropbear must be dynamically
-linked against it. The Ingenic toolchain at
+The camera runs uClibc (`/lib/ld-uClibc.so.0`), so dropbear must be built with
+`-muclibc` flag. The Ingenic toolchain at
 [Dafang-Hacks/Ingenic-T10_20](https://github.com/Dafang-Hacks/Ingenic-T10_20)
-includes a uClibc sysroot at `mips-gcc472-glibc216-64bit/mips-linux-gnu/libc/uclibc/`.
+includes uClibc support.
 
-Building dropbear with password auth requires `crypt()` from uClibc, which is why
-the standard Debian cross-compiler cannot be used for this binary.
+```bash
+# In Docker with Ingenic toolchain:
+TC=/build/tc/mips-gcc472-glibc216-64bit
+export PATH=$TC/bin:$PATH
+CC=mips-linux-gnu-gcc
+UCFLAGS="-muclibc -O2 -march=mips32r2"
+ULDFLAGS="-muclibc -static"
+
+cd dropbear-2022.83
+cat > localoptions.h <<EOPT
+#define DROPBEAR_SVR_PASSWORD_AUTH 1
+#define DROPBEAR_SVR_PUBKEY_AUTH 1
+EOPT
+
+CC=$CC CFLAGS="$UCFLAGS" LDFLAGS="$ULDFLAGS" \
+  ./configure --host=mips-linux-gnu --prefix=/usr \
+  --disable-zlib --disable-pam
+
+# Force crypt() support
+sed -i "s|#undef HAVE_CRYPT|#define HAVE_CRYPT 1|" config.h
+sed -i "s|#error.*crypt.*|#\/\* crypt check bypassed \*\/|" sysoptions.h
+
+make PROGRAMS="dropbear dbclient scp" -j$(nproc)
+cat dropbear dbclient scp > dropbearmulti
+```
+
+The key flag is `-muclibc` which tells GCC to link against the uClibc sysroot
+instead of glibc. Without this, `crypt()` is unavailable and password auth fails.
 
 ## Binary versions (current)
 
@@ -45,7 +71,7 @@ the standard Debian cross-compiler cannot be used for this binary.
 |--------|---------|---------|
 | busybox | 1.37.0 | static (glibc) |
 | jq | 1.7.1 | static (glibc) |
-| dropbearmulti | 2019.78 | dynamic (uClibc) |
+| dropbearmulti | 2022.83 | static (uClibc) |
 
 ## Updating
 
