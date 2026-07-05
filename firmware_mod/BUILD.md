@@ -65,6 +65,29 @@ cat dropbear dbclient scp > dropbearmulti
 The key flag is `-muclibc` which tells GCC to link against the uClibc sysroot
 instead of glibc. Without this, `crypt()` is unavailable and password auth fails.
 
+**mDNSResponder** — Apple's mDNS daemon, cross-compiled for uClibc:
+
+```bash
+# Clone Apple's mDNSResponder
+git clone --depth 1 --branch mDNSResponder-1556.80.2 \
+  https://github.com/apple-oss-distributions/mDNSResponder.git
+cd mDNSResponder/mDNSPosix
+
+# Patches needed for GCC 4.7 + uClibc:
+# 1. _mdns_strict_strlcpy → strlcpy
+# 2. IFA_FLAGS define
+# 3. TCP_NOTSENT_LOWAT define
+# 4. TLS stubs (no mbedtls)
+# 5. os=linux, CC with -muclibc, LINKOPTS with uclibc .a files
+
+make CC="mips-linux-gnu-gcc -muclibc" \
+  CFLAGS="-O2 -march=mips32r2 -std=gnu99 ..." \
+  LDFLAGS="-static"
+```
+
+Key: `-muclibc` on both CC and LINKOPTS ensures the binary links against
+uClibc (`/lib/ld-uClibc.so.0`) instead of glibc.
+
 ## Binary versions (current)
 
 | Binary | Version | Linkage |
@@ -72,6 +95,7 @@ instead of glibc. Without this, `crypt()` is unavailable and password auth fails
 | busybox | 1.37.0 | static (glibc) |
 | jq | 1.7.1 | static (glibc) |
 | dropbearmulti | 2022.83 | static (uClibc) |
+| mDNSResponder | 1556.80.2 | dynamic (uClibc) |
 
 ## Updating
 
