@@ -15,7 +15,8 @@ start()
   	echo "mDNSResponder already running";
   else
     echo "Starting mDNSResponder";
-		/system/sdcard/bin/mDNSResponder -b -P "$PIDFILE" -n "$(hostname)" -t _rtsp._tcp -p 8554
+		CAMERANAME=$(cat /system/sdcard/cameraname 2>/dev/null || hostname)
+		/system/sdcard/bin/mDNSResponder -b -P "$PIDFILE" -n "$CAMERANAME" -t _rtsp._tcp -p 8554
   fi
 }
 

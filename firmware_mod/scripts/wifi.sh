@@ -14,6 +14,8 @@ WIFI_VERBOSE=1
 
 MIN_CONNECT_TIMEOUT=30
 MIN_SCAN_INTERVAL=10
+MAX_RECONNECT_ATTEMPTS=5
+RECONNECT_BASE_DELAY=10
 
 WPA_BIN=/system/bin/wpa_supplicant
 WPA_CONFIG="$CONFIGPATH/wpa_supplicant.conf"
@@ -96,8 +98,9 @@ hostapd_stop() {
 }
 
 udhcpc_start() {
-  log info "Starting udhcpc"
-  "$UDHCPC_BIN" -b -p "$UDHCPC_PIDFILE" -i "$WIFI_IFACE" -x hostname:"$(hostname)"
+  local HOSTNAME=$(cat /system/sdcard/cameraname 2>/dev/null || hostname)
+  log info "Starting udhcpc (hostname=$HOSTNAME)"
+  "$UDHCPC_BIN" -b -p "$UDHCPC_PIDFILE" -i "$WIFI_IFACE" -x hostname:"$HOSTNAME"
 }
 
 udhcpc_stop() {
@@ -142,6 +145,16 @@ wpa_action_disconnected() {
   wpa_action_watchdog_start
 }
 
+wifi_get_signal_strength() {
+  local RESULT=$("$WPA_CLI_BIN" -i "$WIFI_IFACE" SIGNAL_POLL 2>/dev/null)
+  echo "$RESULT" | grep "SIGNAL=" | cut -d= -f2
+}
+
+wifi_check_connection() {
+  local STATUS=$("$WPA_CLI_BIN" -i "$WIFI_IFACE" status 2>/dev/null)
+  echo "$STATUS" | grep "wpa_state=COMPLETED" >/dev/null 2>&1
+}
+
 wpa_action_watchdog() {
   local TIMEOUT="$(get_config "$WIFI_CONFIG" connect_timeout)"
   if [ -z "$TIMEOUT" ] || [ "$TIMEOUT" -lt "$MIN_CONNECT_TIMEOUT" ]; then
@@ -149,8 +162,38 @@ wpa_action_watchdog() {
   fi
   log verbose "wpa_action watchdog sleeping $TIMEOUT seconds"
   sleep "$TIMEOUT"
+
+  if wifi_check_connection; then
+    local SIGNAL=$(wifi_get_signal_strength)
+    log info "WiFi connected (signal: ${SIGNAL:-unknown}%)"
+    rm -f "$WPA_ACTION_PIDFILE"
+    return 0
+  fi
+
+  log info "WiFi not connected after ${TIMEOUT}s, attempting reconnect"
+
+  local ATTEMPT=0
+  while [ "$ATTEMPT" -lt "$MAX_RECONNECT_ATTEMPTS" ]; do
+    ATTEMPT=$((ATTEMPT + 1))
+    local DELAY=$((RECONNECT_BASE_DELAY * ATTEMPT))
+    log info "Reconnect attempt $ATTEMPT/$MAX_RECONNECT_ATTEMPTS (waiting ${DELAY}s)"
+    sleep "$DELAY"
+
+    reset_iface
+    sleep 2
+    wpa_supplicant_start
+    sleep 5
+
+    if wifi_check_connection; then
+      local SIGNAL=$(wifi_get_signal_strength)
+      log info "Reconnected on attempt $ATTEMPT (signal: ${SIGNAL:-unknown}%)"
+      rm -f "$WPA_ACTION_PIDFILE"
+      return 0
+    fi
+  done
+
+  log info "Failed to reconnect after $MAX_RECONNECT_ATTEMPTS attempts, switching to AP mode"
   rm -f "$WPA_ACTION_PIDFILE"
-  log verbose "wpa_action watchdog switching to ap mode"
   exec "$WIFI_BIN" ap
 }
 
@@ -185,16 +228,19 @@ ap_scanner() {
       log verbose "ap_scanner has no ssid, skipping scan"
       continue
     fi
-    local SCAN="$(ap_scanner_scan)"
-    local SCAN_COUNT="$(echo "$SCAN" | wc -l)"
-    log verbose "ap_scanner found $SCAN_COUNT ssids"
-    if [ -z "$SCAN" ]; then continue; fi
+    local SCAN="$(iwlist "$WIFI_IFACE" scanning 2>/dev/null | grep 'ESSID:' | grep -v '""')"
+    if [ -z "$SCAN" ]; then
+      log verbose "ap_scanner found no networks"
+      continue
+    fi
     if echo "$SCAN" | grep -q "$SSID"; then
+      local STRENGTH=$(echo "$SCAN" | grep "$SSID" | grep -oE 'Signal level=[-0-9]+' | head -1 | cut -d= -f2)
+      log info "ap_scanner found $SSID (signal: ${STRENGTH:-unknown}dBm)"
       rm -f "$AP_SCANNER_PIDFILE"
-      log verbose "ap_scanner found ssid, switching to station mode"
+      log info "Switching to station mode"
       exec "$WIFI_BIN" station
     else
-      log verbose "ap_scanner found no configured ssid"
+      log verbose "ap_scanner: configured SSID '$SSID' not found in scan results"
     fi
   done
 }
