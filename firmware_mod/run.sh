@@ -12,8 +12,9 @@ echo "==================================================" >> $LOGPATH
 echo "Starting the Dafang Hacks Custom Application Layer" >> $LOGPATH
 echo "==================================================" >> $LOGPATH
 
-## Stop telnet for security reasons
-killall telnetd
+## Start telnet as fallback access (if dropbear fails to start)
+/system/sdcard/bin/busybox telnetd 2>/dev/null
+echo "Started telnetd as fallback" >> $LOGPATH
 
 ## Load some common functions:
 . /system/sdcard/scripts/common_functions.sh

@@ -1,0 +1,39 @@
+#!/bin/sh
+PIDFILE="/run/telnetd.pid"
+
+status()
+{
+  pid="$(cat "$PIDFILE" 2>/dev/null)"
+  if [ "$pid" ]; then
+	kill -0 "$pid" >/dev/null && echo "PID: $pid" || return 1
+  fi
+}
+
+start()
+{
+  if [ "$(status)" != "" ]; then
+	echo "Telnetd already running"
+  else
+	echo "Starting telnetd"
+	/system/sdcard/bin/busybox telnetd
+	echo $! > "$PIDFILE"
+  fi
+}
+
+stop()
+{
+  pid="$(cat "$PIDFILE" 2>/dev/null)"
+  if [ "$pid" ]; then
+	kill "$pid" 2>/dev/null
+	rm "$PIDFILE" 2>/dev/null
+  fi
+}
+
+if [ $# -eq 0 ]; then
+  start
+else
+  case $1 in start|stop|status)
+	$1
+	;;
+  esac
+fi

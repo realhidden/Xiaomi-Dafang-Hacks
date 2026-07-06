@@ -1,5 +1,12 @@
 #!/bin/sh
 PIDFILE="/run/dropbear.pid"
+LOGFILE="/system/sdcard/log/dropbear.log"
+DROPBEAR="/system/sdcard/bin/dropbearmulti"
+SSH_PORT=22
+
+log() {
+  echo "$(date +"%D %T") $@" >> "$LOGFILE"
+}
 
 if [ ! -d /system/sdcard/root/.ssh ]; then
   mkdir /system/sdcard/root/.ssh
@@ -14,20 +21,25 @@ if [ ! -f /system/sdcard/config/ssh.conf ]; then
 fi
 
 if [ ! -f /system/bin/scp ]; then
-  ln -s /system/sdcard/bin/dropbearmulti /system/bin/scp
+  ln -s "$DROPBEAR" /system/bin/scp
 fi
 
 if [ ! -f /var/log/lastlog ]; then
   touch /var/log/lastlog 2>/dev/null
 fi
 
-source /system/sdcard/config/ssh.conf
+if [ -f /system/sdcard/config/ssh.conf ]; then
+  . /system/sdcard/config/ssh.conf
+fi
+
+if [ -n "$ssh_port" ]; then
+  SSH_PORT="$ssh_port"
+fi
 
 status()
 {
   pid="$(cat "$PIDFILE" 2>/dev/null)"
   if [ "$pid" ]; then
-	# Prints PID: $pid if exists and returns 0(no error) else returns 1(error condition)
 	kill -0 "$pid" >/dev/null && echo "PID: $pid" || return 1
   fi
 }
@@ -35,15 +47,36 @@ status()
 start()
 {
   if [ "$(status)" != "" ]; then
-	echo "A Dropbear sever is already running, please stop it or reboot"
+	log "Already running (PID: $(cat $PIDFILE))"
+	echo "Dropbear already running"
   else
-	echo "Starting Dropbear Server"
+	log "Starting dropbear on port $SSH_PORT (password auth: ${ssh_password:-on})"
+	echo "Starting Dropbear on port $SSH_PORT"
 
-  	if [ "$ssh_password" = "off" ]; then
-  		/system/sdcard/bin/dropbearmulti dropbear -s -R -p $ssh_port
-  	else
- 		/system/sdcard/bin/dropbearmulti dropbear -R -p $ssh_port
-  	fi
+	if [ ! -x "$DROPBEAR" ]; then
+		log "ERROR: $DROPBEAR not found or not executable"
+		echo "ERROR: dropbearmulti not found"
+		return 1
+	fi
+
+	if [ "$ssh_password" = "off" ]; then
+		"$DROPBEAR" dropbear -s -R -p $SSH_PORT >> "$LOGFILE" 2>&1
+	else
+		"$DROPBEAR" dropbear -R -p $SSH_PORT >> "$LOGFILE" 2>&1
+	fi
+
+	DROPBEAR_PID=$!
+	sleep 1
+
+	if kill -0 "$DROPBEAR_PID" 2>/dev/null; then
+		echo "$DROPBEAR_PID" > "$PIDFILE"
+		log "Started successfully (PID: $DROPBEAR_PID)"
+		echo "Dropbear started (PID: $DROPBEAR_PID)"
+	else
+		log "ERROR: Failed to start dropbear (exit: $?)"
+		echo "ERROR: Failed to start dropbear, check $LOGFILE"
+		return 1
+	fi
   fi
 }
 
@@ -51,8 +84,9 @@ stop()
 {
   pid="$(cat "$PIDFILE" 2>/dev/null)"
   if [ "$pid" ]; then
-	kill "$pid"
-	rm "$PIDFILE" 1> /dev/null 2>&1
+	log "Stopping (PID: $pid)"
+	kill "$pid" 2>/dev/null
+	rm "$PIDFILE" 2>/dev/null
   fi
 }
 
