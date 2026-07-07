@@ -7,7 +7,7 @@ Cross-compiled for Ingenic T20/T20L (MIPS32r2, little-endian).
 Two toolchains are needed:
 
 1. **Debian `mipsel-linux-gnu-gcc`** — for static glibc binaries (busybox, jq)
-2. **Ingenic `mips-gcc472`** — for uClibc binaries (dropbear, mDNSResponder)
+2. **Ingenic `mips-gcc472`** — for uClibc binaries (dropbear, mDNSResponder, curl, mbedTLS)
 
 The Ingenic toolchain is at
 [Dafang-Hacks/Ingenic-T10_20](https://github.com/Dafang-Hacks/Ingenic-T10_20).
@@ -18,7 +18,7 @@ from `uclibc/usr/lib/` directly, not the `.so` symlinks.
 The key flag is `-muclibc` which tells GCC to link against the uClibc sysroot
 instead of glibc. Without this, `crypt()` is unavailable and password auth fails.
 
-## BusyBox 1.37.0
+## BusyBox 1.38.0
 
 Static glibc build with Debian cross-compiler.
 
@@ -26,8 +26,8 @@ Static glibc build with Debian cross-compiler.
 docker run --rm -it debian:bookworm bash
 apt-get update && apt-get install -y gcc-mipsel-linux-gnu make wget xz-utils bzip2 file
 
-wget https://busybox.net/downloads/busybox-1.37.0.tar.bz2
-tar xjf busybox-1.37.0.tar.bz2 && cd busybox-1.37.0
+wget https://busybox.net/downloads/busybox-1.38.0.tar.bz2
+tar xjf busybox-1.38.0.tar.bz2 && cd busybox-1.38.0
 make ARCH=mips CROSS_COMPILE=mipsel-linux-gnu- defconfig
 sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
 # Disable HW-accelerated SHA (not available on MIPS)
@@ -39,13 +39,13 @@ make ARCH=mips CROSS_COMPILE=mipsel-linux-gnu- -j$(nproc)
 
 Produces a ~2.7MB statically linked MIPS binary.
 
-## jq 1.7.1
+## jq 1.8.2
 
 Static glibc build with Debian cross-compiler.
 
 ```bash
-wget https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-1.7.1.tar.gz
-tar xzf jq-1.7.1.tar.gz && cd jq-1.7.1
+wget https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz
+tar xzf jq-1.8.2.tar.gz && cd jq-1.8.2
 CC=mipsel-linux-gnu-gcc CFLAGS="-O2 -march=mips32r2 -static" \
   ./configure --host=mipsel-linux-gnu --with-oniguruma=builtin --enable-all-static
 make -j$(nproc)
@@ -88,43 +88,44 @@ cat dropbear dbclient scp > dropbearmulti
 
 Produces a ~1.7MB statically linked uClibc binary. Password: `ismart12`.
 
-## mDNSResponder 1556.80.2
+## mDNSResponder 2881.120.11
 
 Apple's mDNS daemon, cross-compiled for uClibc with the Ingenic toolchain.
-Requires several patches for GCC 4.7 compatibility.
+Requires several patches for GCC 4.7 and POSIX compatibility.
 
 ```bash
 TC=/path/to/mips-gcc472-glibc216-64bit
 export PATH=$TC/bin:$PATH
-CC="mips-linux-gnu-gcc -muclibc"
-UC=$TC/mips-linux-gnu/libc/uclibc
 
-git clone --depth 1 --branch mDNSResponder-1556.80.2 \
+git clone --depth 1 --branch mDNSResponder-2881.120.11 \
   https://github.com/apple-oss-distributions/mDNSResponder.git
 cd mDNSResponder/mDNSPosix
-mkdir -p objects/prod
+mkdir -p objects/prod build/prod
 ```
 
 ### Patches required
 
-**1. `_mdns_strict_strlcpy` → `strlcpy`** (GCC 4.7 doesn't support the strict wrapper):
+**1. `mdns_strict.h` — remove `_mdns_strict_strlcpy` and use system `strlcpy`:**
 ```bash
-sed -i "s/_mdns_strict_strlcpy/strlcpy/g" ../mDNSCore/mdns_strict.h mDNSPosix.c
+# Delete the _mdns_strict_strlcpy function definition (lines 119-141)
+sed -i "119,141d" ../mDNSCore/mdns_strict.h
+# Replace the macro to point to system strlcpy
+sed -i "s/#define mdns_strlcpy[[:space:]]*_mdns_strict_strlcpy/#define mdns_strlcpy strlcpy/" ../mDNSCore/mdns_strict.h
 ```
 
-**2. `IFA_FLAGS` undefined** (missing in older kernel headers):
+**2. `IFA_FLAGS` undefined** (add at top of mDNSPosix.c):
 ```bash
-sed -i "/#include <linux\/if.h>/a #ifndef IFA_FLAGS\n#define IFA_FLAGS 8\n#endif" mDNSPosix.c
+sed -i "1i #ifndef IFA_FLAGS\n#define IFA_FLAGS 8\n#endif" mDNSPosix.c
 ```
 
-**3. `TCP_NOTSENT_LOWAT` undefined** (defined via CFLAGS):
-```
--DTCP_NOTSENT_LOWAT=19
+**3. AWDL code** (Apple Wireless Direct Link — not available on POSIX):
+```bash
+sed -i "s|const mDNSBool is_split_awdl_query = (req->resolve_awdl && question->InterfaceID == AWDLInterfaceID);|const mDNSBool is_split_awdl_query = mDNSfalse;|" ../mDNSShared/uds_daemon.c
 ```
 
-**4. TLS stubs** (mDNSResponder includes TLS support that requires mbedtls):
+**4. TLS stubs** (mDNSResponder includes mbedtls TLS support — stub it out):
 ```c
-// tls_stubs.c — stub out all TLS functions
+// tls_stubs.c
 int mDNSPosixTLSInit(void *a) { (void)a; return 0; }
 void mDNSPosixTLSFree(void *a) { (void)a; }
 int mDNSPosixTLSRead(void *a, void *b, int c) { (void)a; (void)b; (void)c; return -1; }
@@ -133,57 +134,96 @@ void *mDNSPosixTLSSocket(int a) { (void)a; return 0; }
 int mDNSPosixTLSClientStateCreate(void *a) { (void)a; return 0; }
 int mDNSPosixTLSStart(void *a) { (void)a; return 0; }
 ```
-Compile: `mips-linux-gnu-gcc -muclibc -O2 -march=mips32r2 -std=gnu99 -c tls_stubs.c -o objects/prod/tls_stubs.o`
 
-Then replace `TLSOBJS` in the Makefile to point to `tls_stubs.o` and remove `mbedtls.c.o`.
-
-**5. Makefile configuration:**
+**5. Makefile changes:**
 ```bash
-# Force os=linux (detects via uname -s which may not match cross-compile)
-sed -i '1a os = linux' Makefile
-
-# Remove strip command (host strip can't handle MIPS binaries)
-sed -i 's|\$(STRIP) \$@||g' Makefile
-
-# Set compiler and flags
-sed -i "s|^CC =.*|CC = $CC|" Makefile
-sed -i "s|^CFLAGS =.*|CFLAGS = -O2 -march=mips32r2 -std=gnu99 -DHAVE_IPV6 -DNOT_HAVE_DAEMON -DNO_SECURITYFRAMEWORK -DTARGET_OS_LINUX -D_GNU_SOURCE -DTCP_NOTSENT_LOWAT=19 -DPOSIX_HAS_TLS=0 -w|" Makefile
+sed -i "s|^os =.*|os = linux|" Makefile
+sed -i "0,/^CC =/s|^CC =.*|CC = mips-linux-gnu-gcc -muclibc|" Makefile
+sed -i "/^CFLAGS_COMMON/s/$/ -std=gnu99 -w/" Makefile
 sed -i "s|^LDFLAGS =.*|LDFLAGS = -static|" Makefile
-sed -i "s|^LD =.*|LD = $CC|" Makefile
+sed -i "0,/^LD =/s|^LD =.*|LD = mips-linux-gnu-gcc -muclibc|" Makefile
+sed -i "s/\$(STRIP) \\\$@//g" Makefile
+sed -i "s|TLSOBJS = \$(OBJDIR)/mbedtls.c.o -lmbedtls -lmbedcrypto|TLSOBJS = \$(OBJDIR)/tls_stubs.o|" Makefile
 
-# Add uclibc .a libraries to LINKOPTS (replace empty LINKOPTS on first occurrence)
-# Use python3 or awk — sed can't handle the long paths with /
-LINKOPTS_PATH="$UC/usr/lib/libm.a $UC/usr/lib/librt.a $UC/usr/lib/libresolv.a"
-python3 -c "
-with open('Makefile') as f:
-    lines = f.readlines()
-for i, line in enumerate(lines):
-    if line.strip() == 'LINKOPTS =':
-        lines[i] = 'LINKOPTS = -muclibc $LINKOPTS_PATH\n'
-        break
-with open('Makefile', 'w') as f:
-    f.writelines(lines)
-"
+# Add tls_stubs compilation rule
+printf "\$(OBJDIR)/tls_stubs.o: tls_stubs.c\n\t\$(CC) \$(CFLAGS) -c -o \$@ \$<\n" >> Makefile
 ```
 
 ### Build
 
 ```bash
 make 2>&1 | tail -5
-# Ignore dns-sd client build failure (not needed)
+# Ignore dns-sd client build failure (host linker can't use cross-compiled .so)
 # The mdnsd daemon builds successfully
 ```
 
-Produces a ~1.5MB dynamically linked uClibc binary.
+Produces a ~1.4MB dynamically linked uClibc binary.
+
+## mbedTLS 3.6.3
+
+TLS library used by curl. Built with Ingenic toolchain for uClibc.
+
+```bash
+TC=/path/to/mips-gcc472-glibc216-64bit
+export PATH=$TC/bin:$PATH
+UC=$TC/mips-linux-gnu/libc/uclibc
+
+# Requires: python3-jsonschema python3-jinja2 (apt install)
+git clone --depth 1 --branch v3.6.3 https://github.com/Mbed-TLS/mbedtls.git
+cd mbedtls
+CC=mips-linux-gnu-gcc AR=mips-linux-gnu-ar \
+  CFLAGS="-muclibc -O2 -march=mips32r2 -std=gnu99 -w" \
+  make -j$(nproc) lib
+
+# Install to uclibc sysroot
+mkdir -p $UC/usr/include/mbedtls $UC/usr/include/psa $UC/usr/lib
+cp -r include/mbedtls include/psa $UC/usr/include/
+cp library/libmbed*.a $UC/usr/lib/
+```
+
+## curl 8.21.0 + libcurl
+
+curl with HTTPS via mbedTLS. Produces both `curl` binary and `libcurl.a` for
+linking into other programs.
+
+```bash
+TC=/path/to/mips-gcc472-glibc216-64bit
+export PATH=$TC/bin:$PATH
+
+wget https://curl.se/download/curl-8.21.0.tar.gz
+tar xzf curl-8.21.0.tar.gz && cd curl-8.21.0
+
+CC=mips-linux-gnu-gcc CFLAGS="-muclibc -O2 -march=mips32r2" \
+  ./configure --host=mips-linux-gnu --prefix=/usr \
+  --with-mbedtls --with-ca-path=/etc/ssl/certs \
+  --enable-static --disable-shared \
+  --disable-ldap --disable-rtsp --disable-dict \
+  --disable-telnet --disable-tftp --disable-pop3 \
+  --disable-imap --disable-smb --disable-smtp \
+  --disable-gopher --disable-mqtt --disable-manual \
+  --disable-progress-bar --disable-dependency-tracking \
+  --without-libidn2 --without-librtmp --without-nghttp2 \
+  --without-brotli --without-zstd --without-libpsl \
+  --without-libssh2 --without-libgsasl --without-zlib
+
+make -j$(nproc)
+make install  # installs libcurl.a + headers to sysroot
+```
+
+Produces a ~1.6MB dynamically linked uClibc binary (curl) and a ~1.2MB static
+`libcurl.a` for cross-compilation. Link with `-lcurl -lmbedtls -lmbedx509
+-lmbedcrypto`.
 
 ## Binary versions (current)
 
 | Binary | Version | Linkage |
 |--------|---------|---------|
-| busybox | 1.37.0 | static (glibc) |
-| jq | 1.7.1 | static (glibc) |
-| dropbearmulti | 2022.83 | static (uClibc) |
-| mDNSResponder | 1556.80.2 | dynamic (uClibc) |
+| busybox | 1.38.0 | static (glibc) |
+| jq | 1.8.2 | static (glibc) |
+| dropbearmulti | 2026.92 | static (uClibc) |
+| mDNSResponder | 2881.120.11 | dynamic (uClibc) |
+| curl | 8.21.0 | dynamic (uClibc) |
+| mbedTLS | 3.6.3 | static (uClibc, lib) |
 
 ## Updating
 
