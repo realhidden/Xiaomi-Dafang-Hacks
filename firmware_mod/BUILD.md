@@ -159,60 +159,73 @@ make 2>&1 | tail -5
 
 Produces a ~1.4MB dynamically linked uClibc binary.
 
-## mbedTLS 3.6.3
+## mbedTLS 2.28.9 (2.x LTS)
 
 TLS library used by curl. Built with Ingenic toolchain for uClibc.
+
+**Use 2.28.x, not 3.x** — curl is pinned to 7.59.0 (see below) and curl 7.59's
+mbedTLS glue targets the 2.x API; mbedTLS 3.x is source-incompatible with it.
 
 ```bash
 TC=/path/to/mips-gcc472-glibc216-64bit
 export PATH=$TC/bin:$PATH
-UC=$TC/mips-linux-gnu/libc/uclibc
 
-# Requires: python3-jsonschema python3-jinja2 (apt install)
-git clone --depth 1 --branch v3.6.3 https://github.com/Mbed-TLS/mbedtls.git
-cd mbedtls
+wget https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-2.28.9/mbedtls-2.28.9.tar.bz2
+tar xf mbedtls-2.28.9.tar.bz2 && cd mbedtls-2.28.9
+# -std=gnu99 is REQUIRED: gcc-4.7 defaults to C89, and bignum.c uses C99
+# for-loop declarations.
 CC=mips-linux-gnu-gcc AR=mips-linux-gnu-ar \
   CFLAGS="-muclibc -O2 -march=mips32r2 -std=gnu99 -w" \
   make -j$(nproc) lib
 
-# Install to uclibc sysroot
-mkdir -p $UC/usr/include/mbedtls $UC/usr/include/psa $UC/usr/lib
-cp -r include/mbedtls include/psa $UC/usr/include/
-cp library/libmbed*.a $UC/usr/lib/
+# Stage headers + static libs into /build/mb. Do NOT `make install` — its
+# programs target (aes/crypt_and_hash, etc.) link with the HOST linker and
+# fail in a cross-build.
+mkdir -p /build/mb/include /build/mb/lib
+cp -r include/mbedtls /build/mb/include/
+cp library/libmbed*.a /build/mb/lib/
 ```
 
-## curl 8.21.0 + libcurl
+## curl 7.59.0 + libcurl
 
-curl with HTTPS via mbedTLS. Produces both `curl` binary and `libcurl.a` for
-linking into other programs.
+curl with HTTPS via mbedTLS 2.28. Produces both `curl` binary and `libcurl.a`
+for linking into other programs (e.g. the donekamera client).
+
+**CRITICAL: pin to 7.59.0 — do NOT use curl 8.x.** curl 8.21 (and other 8.x)
+hangs inside `curl_easy_perform` on the camera's uClibc 0.9.33 / gcc-4.7
+runtime: even `curl file:///etc/hostname` stalls forever and `--max-time` never
+fires, while every OS primitive it depends on (getaddrinfo, poll/select,
+non-blocking connect, clock_gettime, socketpair) works fine. 7.59.0 (2018) is
+contemporary with this toolchain and works correctly. This is also the version
+the legacy `curl.bin` shipped with.
 
 ```bash
 TC=/path/to/mips-gcc472-glibc216-64bit
 export PATH=$TC/bin:$PATH
 
-wget https://curl.se/download/curl-8.21.0.tar.gz
-tar xzf curl-8.21.0.tar.gz && cd curl-8.21.0
+wget https://curl.se/download/curl-7.59.0.tar.gz
+tar xzf curl-7.59.0.tar.gz && cd curl-7.59.0
 
-CC=mips-linux-gnu-gcc CFLAGS="-muclibc -O2 -march=mips32r2" \
-  ./configure --host=mips-linux-gnu --prefix=/usr \
-  --with-mbedtls --with-ca-path=/etc/ssl/certs \
-  --enable-static --disable-shared \
-  --disable-ldap --disable-rtsp --disable-dict \
-  --disable-telnet --disable-tftp --disable-pop3 \
-  --disable-imap --disable-smb --disable-smtp \
-  --disable-gopher --disable-mqtt --disable-manual \
-  --disable-progress-bar --disable-dependency-tracking \
-  --without-libidn2 --without-librtmp --without-nghttp2 \
-  --without-brotli --without-zstd --without-libpsl \
-  --without-libssh2 --without-libgsasl --without-zlib
+CC=mips-linux-gnu-gcc \
+  CFLAGS="-muclibc -O2 -march=mips32r2 -w -I/build/mb/include" \
+  LDFLAGS="-L/build/mb/lib" \
+  ./configure --host=mips-linux-gnu --prefix=/usr --with-mbedtls=/build/mb \
+    --enable-static --disable-shared \
+    --disable-ldap --disable-rtsp --disable-dict \
+    --disable-telnet --disable-tftp --disable-pop3 \
+    --disable-imap --disable-smb --disable-smtp \
+    --disable-gopher --disable-manual \
+    --without-libidn2 --without-librtmp --without-nghttp2 \
+    --without-brotli --without-zstd --without-libpsl \
+    --without-libssh2 --without-libgsasl --without-zlib
 
 make -j$(nproc)
 make install  # installs libcurl.a + headers to sysroot
 ```
 
-Produces a ~1.6MB dynamically linked uClibc binary (curl) and a ~1.2MB static
-`libcurl.a` for cross-compilation. Link with `-lcurl -lmbedtls -lmbedx509
--lmbedcrypto`.
+Produces a ~950KB (stripped) dynamically linked uClibc `curl` binary and a
+~620KB static `libcurl.a` for cross-compilation. Link with
+`-lcurl -lmbedtls -lmbedx509 -lmbedcrypto`.
 
 ## Binary versions (current)
 
@@ -222,8 +235,8 @@ Produces a ~1.6MB dynamically linked uClibc binary (curl) and a ~1.2MB static
 | jq | 1.8.2 | static (glibc) |
 | dropbearmulti | 2026.92 | static (uClibc) |
 | mDNSResponder | 2881.120.11 | dynamic (uClibc) |
-| curl | 8.21.0 | dynamic (uClibc) |
-| mbedTLS | 3.6.3 | static (uClibc, lib) |
+| curl | 7.59.0 | dynamic (uClibc) |
+| mbedTLS | 2.28.9 | static (uClibc, lib) |
 
 ## Updating
 
