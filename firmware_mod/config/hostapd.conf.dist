@@ -11,4 +11,5 @@ max_num_sta=8
 wpa_group_rekey=86400
 ssid=dafang
 wpa=2
-wpa_passphrase=ismart12
+# SECURITY: Change this password! Default is well-known.
+wpa_passphrase=CHANGE_ME

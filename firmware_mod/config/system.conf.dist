@@ -1,0 +1,6 @@
+# System configuration
+# Copy to system.conf and modify as needed
+
+# Telnet access (default: off for security)
+# Set to "on" to enable telnet fallback access
+TELNET=off

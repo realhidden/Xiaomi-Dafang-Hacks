@@ -1,2 +1,3 @@
 ssh_port=22
+# SECURITY: Set to "off" to disable password auth (use SSH keys instead)
 ssh_password=on

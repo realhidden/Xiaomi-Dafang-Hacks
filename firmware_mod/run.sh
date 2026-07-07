@@ -13,8 +13,16 @@ echo "Starting the Dafang Hacks Custom Application Layer" >> $LOGPATH
 echo "==================================================" >> $LOGPATH
 
 ## Start telnet as fallback access (if dropbear fails to start)
-/system/sdcard/bin/busybox telnetd 2>/dev/null
-echo "Started telnetd as fallback" >> $LOGPATH
+## Set TELNET=on in /system/sdcard/config/system.conf to enable (default: off)
+if [ -f "$CONFIGPATH/system.conf" ]; then
+  . "$CONFIGPATH/system.conf"
+fi
+if [ "$TELNET" = "on" ]; then
+  /system/sdcard/bin/busybox telnetd 2>/dev/null
+  echo "Started telnetd (fallback access)" >> $LOGPATH
+else
+  echo "Telnet disabled (set TELNET=on in system.conf to enable)" >> $LOGPATH
+fi
 
 ## Load some common functions:
 . /system/sdcard/scripts/common_functions.sh
